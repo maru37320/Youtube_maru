@@ -103,14 +103,22 @@ st.markdown("""
         border-right: 1px solid #2D3548;
     }
     section[data-testid="stSidebar"] .stRadio > label { color: #FAFAFA !important; font-weight: 600 !important; }
+    
+    /* 라디오 버튼 글씨색 흰색으로 변경 */
+    section[data-testid="stSidebar"] .stRadio [role="radiogroup"] label,
+    section[data-testid="stSidebar"] .stRadio [role="radiogroup"] label p,
+    section[data-testid="stSidebar"] .stRadio [role="radiogroup"] label div {
+        color: #FFFFFF !important; 
+    }
     section[data-testid="stSidebar"] .stRadio [role="radiogroup"] label {
-        color: #E0E0E0 !important; background-color: #1E2536 !important;
+        background-color: #1E2536 !important;
         border: 1px solid #2D3548 !important; border-radius: 10px !important;
         padding: 10px 14px !important; margin-bottom: 6px !important;
     }
     section[data-testid="stSidebar"] .stRadio [role="radiogroup"] label:hover {
         border-color: #FF4B4B !important; background-color: #252D40 !important;
     }
+    
     section[data-testid="stSidebar"] h5 { color: #FF8E53 !important; }
     section[data-testid="stSidebar"] .stNumberInput label { color: #E0E0E0 !important; }
     .stTextInput > div > div > input {
@@ -141,7 +149,12 @@ st.markdown("""
 # ============================================================
 # API 키
 # ============================================================
-YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
+try:
+    YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
+except KeyError:
+    st.error("secrets.toml 파일에 YOUTUBE_API_KEY가 없습니다.")
+    st.stop()
+    
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 # ============================================================
@@ -233,8 +246,11 @@ def format_number(n):
 
 
 def summarize_with_gemini(comments_list, video_title):
-    if not GEMINI_API_KEY or not GEMINI_AVAILABLE:
-        return None
+    if not GEMINI_API_KEY:
+        return "❌ Gemini API 키가 설정되지 않아 요약을 생성할 수 없습니다."
+    if not GEMINI_AVAILABLE:
+        return "❌ google-generativeai 모듈이 설치되지 않았습니다."
+        
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel("gemini-2.0-flash")
@@ -261,45 +277,24 @@ def summarize_with_gemini(comments_list, video_title):
     except Exception as e:
         return f"요약 생성 실패: {e}"
 
-
+# 마크다운 코드 블록으로 렌더링되는 것을 방지하기 위해 HTML 문자열의 들여쓰기를 제거
 def make_bar_chart_html(data_dict, colors, title):
-    if not data_dict:
-        return ""
+    if not data_dict: return ""
     max_val = max(data_dict.values()) if max(data_dict.values()) > 0 else 1
     bars = ""
     for i, (label, value) in enumerate(data_dict.items()):
         pct = (value / max_val) * 100
         c = colors[i % len(colors)]
-        bars += f"""
-        <div class="bar-row">
-            <div class="bar-label">{label}</div>
-            <div class="bar-track">
-                <div class="bar-fill" style="width:{max(pct,8)}%;background:linear-gradient(90deg,{c},{c}dd);">
-                    {value:,}
-                </div>
-            </div>
-        </div>"""
-    return f"""<div class="chart-container">
-        <div style="color:#E0E0E0;font-weight:700;font-size:1.05rem;margin-bottom:18px;">{title}</div>
-        {bars}</div>"""
-
+        bars += f'<div class="bar-row"><div class="bar-label">{label}</div><div class="bar-track"><div class="bar-fill" style="width:{max(pct,8)}%;background:linear-gradient(90deg,{c},{c}dd);">{value:,}</div></div></div>'
+    return f'<div class="chart-container"><div style="color:#E0E0E0;font-weight:700;font-size:1.05rem;margin-bottom:18px;">{title}</div>{bars}</div>'
 
 def make_donut_svg(pct, color, label, size=130):
     r = 45
     circ = 2 * 3.14159 * r
     offset = circ - (pct / 100) * circ
-    return f"""
-    <div style="text-align:center;">
-        <svg width="{size}" height="{size}" viewBox="0 0 120 120">
-            <circle cx="60" cy="60" r="{r}" fill="none" stroke="#1A1F2E" stroke-width="12"/>
-            <circle cx="60" cy="60" r="{r}" fill="none" stroke="{color}" stroke-width="12"
-                    stroke-dasharray="{circ}" stroke-dashoffset="{offset}"
-                    stroke-linecap="round" transform="rotate(-90 60 60)"/>
-            <text x="60" y="65" text-anchor="middle" fill="{color}" font-size="20" font-weight="800">
-                {pct:.0f}%</text>
-        </svg>
-        <div style="color:#8892A0;font-size:0.82rem;margin-top:4px;">{label}</div>
-    </div>"""# ============================================================
+    return f'<div style="text-align:center;"><svg width="{size}" height="{size}" viewBox="0 0 120 120"><circle cx="60" cy="60" r="{r}" fill="none" stroke="#1A1F2E" stroke-width="12"/><circle cx="60" cy="60" r="{r}" fill="none" stroke="{color}" stroke-width="12" stroke-dasharray="{circ}" stroke-dashoffset="{offset}" stroke-linecap="round" transform="rotate(-90 60 60)"/><text x="60" y="65" text-anchor="middle" fill="{color}" font-size="20" font-weight="800">{pct:.0f}%</text></svg><div style="color:#8892A0;font-size:0.82rem;margin-top:4px;">{label}</div></div>'
+
+# ============================================================
 # 사이드바
 # ============================================================
 with st.sidebar:
@@ -399,7 +394,7 @@ if search_button:
     comments = get_all_comments(youtube, video_id, mtc, pb, st_txt)
     st.session_state["comments"] = comments
 
-    if GEMINI_API_KEY and GEMINI_AVAILABLE and comments:
+    if comments:
         with st.spinner("🤖 Gemini AI가 댓글을 분석하는 중..."):
             summary = summarize_with_gemini(
                 comments, video_info["title"]
@@ -448,9 +443,13 @@ if "video_info" in st.session_state and "comments" in st.session_state:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # AI 요약
+    # AI 요약 (마크다운 형식을 유지하기 위해 HTML 구조 개선)
     if "summary" in st.session_state and st.session_state["summary"]:
-        summary_html = st.session_state["summary"].replace("\n", "<br>")
+        # 마크다운의 굵은 글씨(**)를 HTML <b> 태그로 변환
+        summary_html = re.sub(r'\*\*(.*?)\*\*', r'<b style="color: #FFF;">\1</b>', st.session_state["summary"])
+        # 줄바꿈 변환
+        summary_html = summary_html.replace("\n", "<br>")
+        
         st.markdown(
             f'<div class="ai-card">'
             f'<div class="ai-title">🤖 Gemini AI 댓글 분석</div>'
