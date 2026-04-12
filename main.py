@@ -1,107 +1,179 @@
 import streamlit as st
-import pandas as pd
-import re
+import google.generativeai as genai
 from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+from langdetect import detect
+from deep_translator import GoogleTranslator
+import urllib.parse as p
+import re
 
-# Gemini
+# ==========================================
+# 1. API 키 설정 (st.secrets 활용)
+# ==========================================
 try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
+    YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+    genai.configure(api_key=GEMINI_API_KEY)
+except KeyError:
+    st.error("🚨 API 키가 설정되지 않았습니다. GitHub Secrets 또는 `.streamlit/secrets.toml` 파일을 확인해주세요.")
+    st.stop()
 
-# ============================================================
-# 페이지 설정
-# ============================================================
-st.set_page_config(page_title="유튜브 댓글 수집기", page_icon="📺", layout="wide")
+# ==========================================
+# 2. 핵심 함수 정의
+# ==========================================
 
-# ============================================================
-# 스타일
-# ============================================================
-st.markdown("""
-<style>
-    .stApp {
-        background: linear-gradient(180deg, #0E1117 0%, #151B28 50%, #1A1F2E 100%);
-    }
-    .main-header {
-        font-size: 2.8rem; font-weight: 800; text-align: center;
-        background: linear-gradient(90deg, #FF4B4B, #FF8E53);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        margin-bottom: 0.3rem;
-    }
-    .sub-header {
-        font-size: 1.05rem; text-align: center; color: #8892A0; margin-bottom: 2rem;
-    }
-    .video-card {
-        background: linear-gradient(135deg, #1E2536, #252D40);
-        border: 1px solid #2D3548; border-radius: 16px; padding: 24px; margin-bottom: 20px;
-    }
-    .video-title { font-size: 1.3rem; font-weight: 700; color: #FFF; margin-bottom: 8px; }
-    .video-channel { color: #8892A0; font-size: 0.95rem; }
-    .stat-card {
-        background: linear-gradient(135deg, #1E2536, #2A3350);
-        border: 1px solid #2D3548; border-radius: 14px; padding: 20px;
-        text-align: center; transition: transform 0.2s;
-    }
-    .stat-card:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(255,75,75,0.15); }
-    .stat-number {
-        font-size: 1.8rem; font-weight: 800;
-        background: linear-gradient(90deg, #FF4B4B, #FF8E53);
-        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    }
-    .stat-label { font-size: 0.85rem; color: #8892A0; margin-top: 4px; }
-    .comment-box {
-        background: linear-gradient(135deg, #1A2033, #212944);
-        border: 1px solid #2D3548; border-left: 4px solid #FF4B4B;
-        padding: 16px 20px; margin-bottom: 12px; border-radius: 0 12px 12px 0;
-        transition: transform 0.2s;
-    }
-    .comment-box:hover { transform: translateX(4px); box-shadow: 0 4px 20px rgba(255,75,75,0.1); }
-    .comment-author { font-weight: 700; color: #E0E0E0; font-size: 0.95rem; }
-    .comment-text {
-        color: #B0B8C8; margin-top: 6px; font-size: 0.92rem;
-        line-height: 1.6; white-space: pre-wrap;
-    }
-    .comment-meta { color: #5A6577; font-size: 0.78rem; margin-top: 8px; }
-    .top-comment-box {
-        background: linear-gradient(135deg, #1E2536, #2A2040);
-        border: 1px solid #3D2D5C; border-left: 4px solid #FF8E53;
-        padding: 16px 20px; margin-bottom: 12px; border-radius: 0 12px 12px 0;
-    }
-    .ai-card {
-        background: linear-gradient(135deg, #1A2040, #1E2850);
-        border: 1px solid #3D4A6B; border-radius: 16px;
-        padding: 28px; margin: 20px 0; position: relative; overflow: hidden;
-    }
-    .ai-card::before {
-        content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
-        background: linear-gradient(90deg, #667eea, #764ba2, #FF4B4B);
-    }
-    .ai-title { font-size: 1.1rem; font-weight: 700; color: #C8B6FF; margin-bottom: 12px; }
-    .ai-text { color: #C8D0DC; font-size: 0.95rem; line-height: 1.8; }
-    .chart-container {
-        background: linear-gradient(135deg, #1A2033, #212944);
-        border: 1px solid #2D3548; border-radius: 16px; padding: 24px; margin: 10px 0;
-    }
-    .bar-row { display: flex; align-items: center; margin-bottom: 14px; }
-    .bar-label {
-        color: #B0B8C8; font-size: 0.88rem; width: 80px;
-        text-align: right; margin-right: 14px; font-weight: 600;
-    }
-    .bar-track {
-        flex: 1; background-color: #1A1F2E; border-radius: 20px;
-        height: 28px; overflow: hidden;
-    }
-    .bar-fill {
-        height: 100%; border-radius: 20px; display: flex; align-items: center;
-        padding-left: 12px; font-size: 0.8rem; font-weight: 700; color: white;
-        transition: width 0.8s ease; min-width: 40px;
-    }
-    section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #141824, #1A2035);
-        border-right: 1px solid #2D3548;
-    }
+def get_video_id(url):
+    """유튜브 URL에서 Video ID를 추출하는 함수"""
+    parsed_url = p.urlparse(url)
+    if parsed_url.hostname == 'youtu.be':
+        return parsed_url.path[1:]
+    if parsed_url.hostname in ('www.youtube.com', 'youtube.com'):
+        if parsed_url.path == '/watch':
+            return p.parse_qs(parsed_url.query)['v'][0]
+    return None
+
+def fetch_youtube_comments(video_id, max_results=774):
+    """유튜브 댓글을 수집하는 함수"""
+    youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+    comments = []
+    
+    try:
+        request = youtube.commentThreads().list(
+            part="snippet",
+            videoId=video_id,
+            maxResults=100, # 한 번에 가져올 최대 개수 (API 제한 100)
+            textFormat="plainText"
+        )
+        
+        while request and len(comments) < max_results:
+            response = request.execute()
+            
+            for item in response['items']:
+                comment_data = item['snippet']['topLevelComment']['snippet']
+                comments.append({
+                    'author': comment_data['authorDisplayName'],
+                    'text': comment_data['textDisplay'],
+                    'likes': comment_data['likeCount'],
+                    'date': comment_data['publishedAt'][:10]
+                })
+                
+            request = youtube.commentThreads().list_next(request, response)
+            
+    except Exception as e:
+        st.error(f"댓글 수집 중 오류 발생: {e}")
+        
+    return comments
+
+def summarize_comments_with_gemini(comments):
+    """좋아요 상위 50개 댓글을 추출하여 Gemini로 요약하는 함수"""
+    if not comments:
+        return "수집된 댓글이 없습니다."
+        
+    # 1. 좋아요(likes) 순으로 내림차순 정렬 후 상위 50개 슬라이싱
+    sorted_comments = sorted(comments, key=lambda x: x['likes'], reverse=True)
+    top_50_comments = sorted_comments[:50]
+    
+    # 2. 텍스트 합치기
+    text_to_summarize = "\n---\n".join([c['text'] for c in top_50_comments])
+    
+    # 3. 프롬프트 작성
+    prompt = f"""
+    다음은 유튜브 영상의 베스트 댓글 상위 50개입니다.
+    이 댓글들의 전반적인 분위기, 긍정/부정 반응, 그리고 사람들이 주로 언급하는 핵심 주제 3가지를 깔끔하게 요약해 주세요.
+    
+    댓글 내용:
+    {text_to_summarize}
+    """
+    
+    # 4. Gemini API 호출 (최신 Flash 모델 사용)
+    try:
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"요약 생성 실패 (API 한도 초과 또는 오류): {e}"
+
+def smart_translate(text, target_lang='ko'):
+    """언어를 감지하고 목표 언어와 다를 때만 번역하는 함수"""
+    try:
+        # 이모티콘만 있거나 텍스트가 비어있으면 그대로 반환
+        if not text or not re.search('[a-zA-Z가-힣]', text):
+            return text
+            
+        detected_lang = detect(text)
+        
+        # langdetect의 결과와 deep-translator의 타겟 코드 매칭 로직
+        # langdetect는 중국어를 'zh-cn'으로 잡고, 번역기는 'zh-CN'을 씁니다.
+        if detected_lang == target_lang or (detected_lang == 'zh-cn' and target_lang == 'zh-CN'):
+            return text 
+            
+        translated = GoogleTranslator(source='auto', target=target_lang).translate(text)
+        return translated
+    except:
+        # 언어 감지 실패 시 원문 반환
+        return text
+
+# ==========================================
+# 3. Streamlit 웹 UI 구현
+# ==========================================
+
+st.set_page_config(page_title="유튜브 댓글 수집 및 AI 분석", page_icon="📊", layout="wide")
+
+st.title("📊 유튜브 댓글 수집기 & AI 분석")
+st.markdown("영상 링크를 넣으면 댓글을 자동으로 수집하고 **Gemini AI**가 분석합니다.")
+
+# 사용자 입력 영역
+youtube_url = st.text_input("⬆️ 유튜브 영상 링크를 붙여넣으세요", placeholder="https://youtu.be/...")
+
+# 번역 언어 선택
+lang_options = {'한국어': 'ko', '영어': 'en', '일본어': 'ja', '중국어': 'zh-CN'}
+selected_lang_name = st.selectbox("🌐 번역할 언어를 선택하세요 (원문과 같으면 번역 생략)", list(lang_options.keys()))
+target_lang_code = lang_options[selected_lang_name]
+
+if st.button("댓글 수집 및 분석 시작", type="primary"):
+    if not youtube_url:
+        st.warning("유튜브 링크를 입력해주세요.")
+    else:
+        video_id = get_video_id(youtube_url)
+        if not video_id:
+            st.error("유효하지 않은 유튜브 링크입니다.")
+        else:
+            with st.spinner('댓글을 수집하고 AI가 분석 중입니다... 잠시만 기다려주세요!'):
+                # 1. 댓글 수집
+                comments = fetch_youtube_comments(video_id)
+                total_comments = len(comments)
+                
+                if total_comments > 0:
+                    st.success(f"✅ 총 {total_comments}개 수집 완료!")
+                    
+                    st.divider()
+                    
+                    # 2. AI 요약 (상위 50개)
+                    st.subheader("🤖 Gemini AI 댓글 요약 (좋아요 상위 50개 기준)")
+                    summary_result = summarize_comments_with_gemini(comments)
+                    st.info(summary_result)
+                    
+                    st.divider()
+                    
+                    # 3. 댓글 목록 및 스마트 번역
+                    st.subheader(f"💬 수집된 댓글 목록 ({selected_lang_name} 번역 모드)")
+                    
+                    # 너무 많으면 화면이 길어지므로 100개까지만 화면에 출력
+                    display_limit = min(100, total_comments)
+                    st.caption(f"화면에는 최대 100개까지만 표시됩니다.")
+                    
+                    # 좋아요 순으로 정렬하여 출력
+                    sorted_comments = sorted(comments, key=lambda x: x['likes'], reverse=True)
+                    
+                    for i, comment in enumerate(sorted_comments[:display_limit]):
+                        # 스마트 번역 실행
+                        translated_text = smart_translate(comment['text'], target_lang=target_lang_code)
+                        
+                        with st.container():
+                            st.markdown(f"**{comment['author']}** (👍 {comment['likes']} | 📅 {comment['date']})")
+                            st.write(translated_text)
+                            st.divider()
+                else:
+                    st.warning("댓글이 없거나 수집할 수 없는 영상입니다 (댓글 사용 중지 등).")    }
     section[data-testid="stSidebar"] .stRadio > label { color: #FAFAFA !important; font-weight: 600 !important; }
     
     /* 라디오 버튼 글씨색 흰색으로 변경 */
