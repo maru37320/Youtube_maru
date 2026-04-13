@@ -237,12 +237,26 @@ def format_number(n):
         return f"{n/1000:.1f}천"
     return f"{n:,}"
 
-def extract_top_keywords(comments, top_n=5):
+# 불용어(Stopwords)를 제외한 키워드 추출 함수 (업데이트됨)
+def extract_top_keywords(comments, custom_stopwords_str="", top_n=5):
     all_words = []
-    stopwords = {"너무", "진짜", "정말", "많이", "이거", "그냥", "영상", "유튜브", "좋아요", "구독", "있는", "이런", "저런", "그리고"}
+    
+    # 1. 기본 제공 불용어 (한국어 + 영어)
+    default_stopwords = {
+        "너무", "진짜", "정말", "많이", "이거", "그냥", "영상", "유튜브", "좋아요", "구독", "있는", "이런", "저런", "그리고",
+        "the", "to", "and", "of", "is", "it", "that", "you", "for", "on", "was", "with", "as", "at", "be", "this", "have", "in", "are", "but", "not", "we", "so"
+    }
+    
+    # 2. 사이드바에서 입력받은 추가 불용어 업데이트
+    if custom_stopwords_str:
+        user_stops = {s.strip().lower() for s in custom_stopwords_str.split(",") if s.strip()}
+        default_stopwords.update(user_stops)
+
     for c in comments:
         words = re.findall(r'[가-힣a-zA-Z]{2,}', c["댓글"])
-        all_words.extend([w for w in words if w not in stopwords])
+        # 불용어 리스트에 없는 단어들만 소문자로 변환하여 리스트에 추가
+        all_words.extend([w.lower() for w in words if w.lower() not in default_stopwords])
+        
     return dict(Counter(all_words).most_common(top_n))
 
 def make_bar_chart_html(data_dict, colors, title):
@@ -284,22 +298,27 @@ with st.sidebar:
         
     st.divider()
     
-    # 전세계 언어 번역 설정 추가
     st.markdown("##### 🌐 다국어 번역 설정")
     enable_translation = st.toggle("외국어 댓글 번역하기", value=False)
-    target_lang = "ko" # 기본 타겟 언어
+    target_lang = "ko" 
     
     if enable_translation:
         langs_dict = get_supported_langs()
         lang_names = list(langs_dict.keys())
-        
-        # 'korean'이 목록에 있으면 기본 선택값으로 지정, 없으면 0번째
         default_idx = lang_names.index("korean") if "korean" in lang_names else 0
-        
         selected_lang_name = st.selectbox("어떤 언어로 번역할까요?", lang_names, index=default_idx)
         target_lang = langs_dict[selected_lang_name]
-        
         st.info(f"💡 번역을 켜면 수집 속도가 느려질 수 있습니다.\n선택된 언어: **{selected_lang_name}**")
+
+    st.divider()
+
+    # 불용어(Stopwords) 설정 추가 영역
+    st.markdown("##### 🚫 분석 제외 단어 (불용어)")
+    user_stops_input = st.text_area(
+        "제외할 단어 (쉼표로 구분)", 
+        placeholder="예: 진짜, 너무, the, is", 
+        help="분석 차트에서 보고 싶지 않은 단어를 입력하시면 키워드 추출 시 제외됩니다."
+    )
         
     st.divider()
     st.markdown("<p style='text-align:center;color:#5A6577;font-size:0.75rem;'>YouTube Data API v3</p>", unsafe_allow_html=True)
@@ -357,7 +376,6 @@ if search_button:
     pb = st.progress(0)
     st_txt = st.empty()
     
-    # 선택된 target_lang을 수집 함수에 전달
     comments = get_all_comments(youtube, video_id, mtc, pb, st_txt, enable_translation, target_lang)
     st.session_state["comments"] = comments
 
@@ -517,7 +535,8 @@ if "video_info" in st.session_state and "comments" in st.session_state:
 
         kw_col, lk_col = st.columns(2)
         with kw_col:
-            top_k = extract_top_keywords(comments, 5)
+            # 사용자가 사이드바에 입력한 user_stops_input 변수를 extract_top_keywords 함수로 넘깁니다.
+            top_k = extract_top_keywords(comments, custom_stopwords_str=user_stops_input, top_n=5)
             st.markdown(make_bar_chart_html(top_k, ["#4ECDC4", "#45B7D1", "#667eea", "#f093fb", "#FF8E53"], "🔥 가장 많이 언급된 단어"), unsafe_allow_html=True)
 
         with lk_col:
