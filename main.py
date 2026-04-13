@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import re
+from collections import Counter
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -175,11 +176,15 @@ def get_all_comments(youtube, video_id, max_comments, progress_bar, status_text)
                 if len(comments) >= max_comments:
                     break
                 sn = item["snippet"]["topLevelComment"]["snippet"]
+                full_date = sn.get("publishedAt", "")
+                
                 comments.append({
                     "작성자": sn.get("authorDisplayName", ""),
                     "댓글": sn.get("textDisplay", ""),
                     "좋아요": sn.get("likeCount", 0),
-                    "작성일": sn.get("publishedAt", "")[:10],
+                    "작성일시": full_date,
+                    "작성일": full_date[:10] if full_date else "",
+                    "시간": int(full_date[11:13]) if len(full_date) >= 13 else 0, # 시간대 추출
                     "수정일": sn.get("updatedAt", "")[:10],
                 })
             prog = min(len(comments) / max_comments, 1.0)
@@ -209,43 +214,34 @@ def format_number(n):
         return f"{n/1000:.1f}천"
     return f"{n:,}"
 
+def extract_top_keywords(comments, top_n=5):
+    all_words = []
+    stopwords = {"너무", "진짜", "정말", "많이", "이거", "그냥", "영상", "유튜브", "좋아요", "구독", "있는", "이런", "저런", "그리고"}
+    for c in comments:
+        words = re.findall(r'[가-힣a-zA-Z]{2,}', c["댓글"])
+        all_words.extend([w for w in words if w not in stopwords])
+    return dict(Counter(all_words).most_common(top_n))
+
 def make_bar_chart_html(data_dict, colors, title):
     if not data_dict:
         return ""
     max_val = max(data_dict.values()) if max(data_dict.values()) > 0 else 1
-    bars = ""
+    
+    # HTML 버그 해결: 들여쓰기(띄어쓰기)를 완전히 없애서 Streamlit이 코드 블록으로 인식하지 않게 만듭니다.
+    bars_html = ""
     for i, (label, value) in enumerate(data_dict.items()):
         pct = (value / max_val) * 100
         c = colors[i % len(colors)]
-        bars += f"""
-        <div class="bar-row">
-            <div class="bar-label">{label}</div>
-            <div class="bar-track">
-                <div class="bar-fill" style="width:{max(pct,8)}%;background:linear-gradient(90deg,{c},{c}dd);">
-                    {value:,}
-                </div>
-            </div>
-        </div>"""
-    return f"""<div class="chart-container">
-        <div style="color:#E0E0E0;font-weight:700;font-size:1.05rem;margin-bottom:18px;">{title}</div>
-        {bars}</div>"""
+        bars_html += f'<div class="bar-row"><div class="bar-label">{label}</div><div class="bar-track"><div class="bar-fill" style="width:{max(pct,8)}%;background:linear-gradient(90deg,{c},{c}dd);">{value:,}</div></div></div>'
+    
+    return f'<div class="chart-container"><div style="color:#E0E0E0;font-weight:700;font-size:1.05rem;margin-bottom:18px;">{title}</div>{bars_html}</div>'
 
 def make_donut_svg(pct, color, label, size=130):
     r = 45
     circ = 2 * 3.14159 * r
     offset = circ - (pct / 100) * circ
-    return f"""
-    <div style="text-align:center;">
-        <svg width="{size}" height="{size}" viewBox="0 0 120 120">
-            <circle cx="60" cy="60" r="{r}" fill="none" stroke="#1A1F2E" stroke-width="12"/>
-            <circle cx="60" cy="60" r="{r}" fill="none" stroke="{color}" stroke-width="12"
-                    stroke-dasharray="{circ}" stroke-dashoffset="{offset}"
-                    stroke-linecap="round" transform="rotate(-90 60 60)"/>
-            <text x="60" y="65" text-anchor="middle" fill="{color}" font-size="20" font-weight="800">
-                {pct:.0f}%</text>
-        </svg>
-        <div style="color:#8892A0;font-size:0.82rem;margin-top:4px;">{label}</div>
-    </div>"""
+    # SVG 렌더링을 위한 문자열 (여기도 코드 블록 방지를 위해 압축)
+    return f'<div style="text-align:center;"><svg width="{size}" height="{size}" viewBox="0 0 120 120"><circle cx="60" cy="60" r="{r}" fill="none" stroke="#1A1F2E" stroke-width="12"/><circle cx="60" cy="60" r="{r}" fill="none" stroke="{color}" stroke-width="12" stroke-dasharray="{circ}" stroke-dashoffset="{offset}" stroke-linecap="round" transform="rotate(-90 60 60)"/><text x="60" y="65" text-anchor="middle" fill="{color}" font-size="20" font-weight="800">{pct:.0f}%</text></svg><div style="color:#8892A0;font-size:0.82rem;margin-top:4px;">{label}</div></div>'
 
 # ============================================================
 # 사이드바
@@ -388,7 +384,6 @@ if "video_info" in st.session_state and "comments" in st.session_state:
             )
 
     st.markdown("<br>", unsafe_allow_html=True)
-
     st.divider()
 
     if not comments:
@@ -436,18 +431,10 @@ if "video_info" in st.session_state and "comments" in st.session_state:
                     "👍 좋아요", format="%d",
                     min_value=0, max_value=max_l
                 ),
-                "작성자": st.column_config.TextColumn(
-                    "👤 작성자", width="medium"
-                ),
-                "댓글": st.column_config.TextColumn(
-                    "💬 댓글", width="large"
-                ),
-                "작성일": st.column_config.TextColumn(
-                    "📅 작성일", width="small"
-                ),
-                "수정일": st.column_config.TextColumn(
-                    "✏️ 수정일", width="small"
-                ),
+                "작성자": st.column_config.TextColumn("👤 작성자", width="medium"),
+                "댓글": st.column_config.TextColumn("💬 댓글", width="large"),
+                "작성일": st.column_config.TextColumn("📅 작성일", width="small"),
+                "수정일": st.column_config.TextColumn("✏️ 수정일", width="small"),
             }
         )
 
@@ -504,6 +491,7 @@ if "video_info" in st.session_state and "comments" in st.session_state:
         max_likes = max(c["좋아요"] for c in comments) if total_c else 0
         avg_len = sum(len(c["댓글"]) for c in comments) / total_c if total_c else 0
 
+        # 상단 통계 수치
         s1, s2, s3, s4 = st.columns(4)
         stat_items = [
             ("📝", "총 수집", f"{total_c:,}개"),
@@ -522,78 +510,77 @@ if "video_info" in st.session_state and "comments" in st.session_state:
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # 도넛 차트 - 좋아요 있는 댓글 비율
+        # ----------------------------------------------------
+        # 복구된 기능 1: 트렌드 분석 차트 (날짜 & 시간)
+        # ----------------------------------------------------
+        st.markdown('<h4 style="color:#FFF;">📈 날짜 및 시간별 화력 트렌드</h4>', unsafe_allow_html=True)
+        t_col1, t_col2 = st.columns(2)
+        with t_col1:
+            st.markdown('<div class="chart-container"><p style="font-weight:700;color:white;margin-bottom:10px;">📅 날짜별 댓글 수 추이</p>', unsafe_allow_html=True)
+            daily_counts = df.groupby("작성일").size()
+            st.line_chart(daily_counts, color="#FF4B4B")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with t_col2:
+            st.markdown('<div class="chart-container"><p style="font-weight:700;color:white;margin-bottom:10px;">⏰ 시간대별 작성 분포 (0~23시)</p>', unsafe_allow_html=True)
+            hourly_counts = df.groupby("시간").size().reindex(range(24), fill_value=0)
+            st.bar_chart(hourly_counts, color="#FF8E53")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 비율 도넛 차트
         has_likes = sum(1 for c in comments if c["좋아요"] > 0)
-        no_likes = total_c - has_likes
         pct_likes = (has_likes / total_c * 100) if total_c else 0
-
-        short_c = sum(1 for c in comments if len(c["댓글"]) <= 30)
-        pct_short = (short_c / total_c * 100) if total_c else 0
-
-        long_c = sum(1 for c in comments if len(c["댓글"]) > 100)
-        pct_long = (long_c / total_c * 100) if total_c else 0
+        pct_short = (sum(1 for c in comments if len(c["댓글"]) <= 30) / total_c * 100) if total_c else 0
+        pct_long = (sum(1 for c in comments if len(c["댓글"]) > 100) / total_c * 100) if total_c else 0
 
         d1, d2, d3 = st.columns(3)
-        with d1:
+        with d1: st.markdown(make_donut_svg(pct_likes, "#FF4B4B", "좋아요 받은 댓글"), unsafe_allow_html=True)
+        with d2: st.markdown(make_donut_svg(pct_short, "#4ECDC4", "짧은 댓글 (30자 이하)"), unsafe_allow_html=True)
+        with d3: st.markdown(make_donut_svg(pct_long, "#FF8E53", "긴 댓글 (100자 이상)"), unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ----------------------------------------------------
+        # 복구된 기능 2: 키워드 순위
+        # ----------------------------------------------------
+        kw_col, lk_col = st.columns(2)
+        
+        with kw_col:
+            top_k = extract_top_keywords(comments, 5)
             st.markdown(
-                make_donut_svg(pct_likes, "#FF4B4B", "좋아요 받은 댓글"),
+                make_bar_chart_html(top_k, ["#4ECDC4", "#45B7D1", "#667eea", "#f093fb", "#FF8E53"], "🔥 가장 많이 언급된 단어"),
                 unsafe_allow_html=True
             )
-        with d2:
+
+        with lk_col:
+            # 둥근 바 차트 - 좋아요 분포
+            like_ranges = {"0": 0, "1~5": 0, "6~20": 0, "21~100": 0, "100+": 0}
+            for c in comments:
+                lk = c["좋아요"]
+                if lk == 0: like_ranges["0"] += 1
+                elif lk <= 5: like_ranges["1~5"] += 1
+                elif lk <= 20: like_ranges["6~20"] += 1
+                elif lk <= 100: like_ranges["21~100"] += 1
+                else: like_ranges["100+"] += 1
+
+            like_colors = ["#5A6577", "#4ECDC4", "#45B7D1", "#FF8E53", "#FF4B4B"]
             st.markdown(
-                make_donut_svg(pct_short, "#4ECDC4", "짧은 댓글 (30자 이하)"),
-                unsafe_allow_html=True
-            )
-        with d3:
-            st.markdown(
-                make_donut_svg(pct_long, "#FF8E53", "긴 댓글 (100자 이상)"),
+                make_bar_chart_html(like_ranges, like_colors, "👍 좋아요 분포"),
                 unsafe_allow_html=True
             )
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # 둥근 바 차트 - 좋아요 분포
-        like_ranges = {
-            "0": 0, "1~5": 0, "6~20": 0, "21~100": 0, "100+": 0
-        }
-        for c in comments:
-            lk = c["좋아요"]
-            if lk == 0:
-                like_ranges["0"] += 1
-            elif lk <= 5:
-                like_ranges["1~5"] += 1
-            elif lk <= 20:
-                like_ranges["6~20"] += 1
-            elif lk <= 100:
-                like_ranges["21~100"] += 1
-            else:
-                like_ranges["100+"] += 1
-
-        like_colors = ["#5A6577", "#4ECDC4", "#45B7D1", "#FF8E53", "#FF4B4B"]
-        st.markdown(
-            make_bar_chart_html(like_ranges, like_colors, "👍 좋아요 분포"),
-            unsafe_allow_html=True
-        )
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # 둥근 바 차트 - 댓글 길이 분포
-        len_ranges = {
-            "~10자": 0, "11~30자": 0, "31~100자": 0,
-            "101~300자": 0, "300자+": 0
-        }
+        len_ranges = {"~10자": 0, "11~30자": 0, "31~100자": 0, "101~300자": 0, "300자+": 0}
         for c in comments:
             cl = len(c["댓글"])
-            if cl <= 10:
-                len_ranges["~10자"] += 1
-            elif cl <= 30:
-                len_ranges["11~30자"] += 1
-            elif cl <= 100:
-                len_ranges["31~100자"] += 1
-            elif cl <= 300:
-                len_ranges["101~300자"] += 1
-            else:
-                len_ranges["300자+"] += 1
+            if cl <= 10: len_ranges["~10자"] += 1
+            elif cl <= 30: len_ranges["11~30자"] += 1
+            elif cl <= 100: len_ranges["31~100자"] += 1
+            elif cl <= 300: len_ranges["101~300자"] += 1
+            else: len_ranges["300자+"] += 1
 
         len_colors = ["#667eea", "#764ba2", "#f093fb", "#FF8E53", "#FF4B4B"]
         st.markdown(
