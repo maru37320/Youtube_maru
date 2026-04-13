@@ -1,5 +1,6 @@
 streamlit
-google-generativeai
+pandas
 google-api-python-client
+google-generativeai
 langdetect
 deep-translator
