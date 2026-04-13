@@ -4,7 +4,7 @@ import re
 from collections import Counter
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from deep_translator import GoogleTranslator  # 번역 라이브러리 추가
+from deep_translator import GoogleTranslator
 
 # ============================================================
 # 페이지 설정
@@ -128,8 +128,16 @@ st.markdown("""
 YOUTUBE_API_KEY = st.secrets["YOUTUBE_API_KEY"]
 
 # ============================================================
-# 함수
+# 함수 (캐싱 포함)
 # ============================================================
+@st.cache_data
+def get_supported_langs():
+    try:
+        return GoogleTranslator().get_supported_languages(as_dict=True)
+    except Exception:
+        # 실패 시 자주 쓰이는 언어로 폴백
+        return {"korean": "ko", "english": "en", "japanese": "ja", "spanish": "es", "french": "fr"}
+
 def extract_video_id(url):
     patterns = [
         r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})',
@@ -163,10 +171,10 @@ def get_video_info(youtube, video_id):
         pass
     return None
 
-def get_all_comments(youtube, video_id, max_comments, progress_bar, status_text, do_translate):
+def get_all_comments(youtube, video_id, max_comments, progress_bar, status_text, do_translate, target_lang="ko"):
     comments = []
     npt = None
-    translator = GoogleTranslator(source='auto', target='ko') if do_translate else None
+    translator = GoogleTranslator(source='auto', target=target_lang) if do_translate else None
     
     try:
         while len(comments) < max_comments:
@@ -181,7 +189,6 @@ def get_all_comments(youtube, video_id, max_comments, progress_bar, status_text,
                 sn = item["snippet"]["topLevelComment"]["snippet"]
                 full_date = sn.get("publishedAt", "")
                 
-                # 댓글 텍스트 및 번역 처리
                 comment_text = sn.get("textDisplay", "")
                 is_translated = False
                 if do_translate and comment_text:
@@ -191,7 +198,7 @@ def get_all_comments(youtube, video_id, max_comments, progress_bar, status_text,
                             comment_text = translated_text
                             is_translated = True
                     except Exception:
-                        pass # 번역 실패 시 원본 유지
+                        pass
                 
                 comments.append({
                     "작성자": sn.get("authorDisplayName", ""),
@@ -239,8 +246,7 @@ def extract_top_keywords(comments, top_n=5):
     return dict(Counter(all_words).most_common(top_n))
 
 def make_bar_chart_html(data_dict, colors, title):
-    if not data_dict:
-        return ""
+    if not data_dict: return ""
     max_val = max(data_dict.values()) if max(data_dict.values()) > 0 else 1
     bars_html = ""
     for i, (label, value) in enumerate(data_dict.items()):
@@ -274,24 +280,29 @@ with st.sidebar:
     )
     custom_max = 200
     if collect_mode == "custom":
-        custom_max = st.number_input(
-            "수집할 댓글 수", min_value=10, max_value=10000, value=200, step=50
-        )
+        custom_max = st.number_input("수집할 댓글 수", min_value=10, max_value=10000, value=200, step=50)
         
     st.divider()
     
-    # 번역 기능 토글 추가
-    st.markdown("##### 🌐 번역 설정")
-    enable_translation = st.toggle("외국어 댓글 한국어로 번역하기", value=False)
+    # 전세계 언어 번역 설정 추가
+    st.markdown("##### 🌐 다국어 번역 설정")
+    enable_translation = st.toggle("외국어 댓글 번역하기", value=False)
+    target_lang = "ko" # 기본 타겟 언어
+    
     if enable_translation:
-        st.info("💡 번역을 켜면 수집 속도가 조금 느려질 수 있습니다.")
+        langs_dict = get_supported_langs()
+        lang_names = list(langs_dict.keys())
+        
+        # 'korean'이 목록에 있으면 기본 선택값으로 지정, 없으면 0번째
+        default_idx = lang_names.index("korean") if "korean" in lang_names else 0
+        
+        selected_lang_name = st.selectbox("어떤 언어로 번역할까요?", lang_names, index=default_idx)
+        target_lang = langs_dict[selected_lang_name]
+        
+        st.info(f"💡 번역을 켜면 수집 속도가 느려질 수 있습니다.\n선택된 언어: **{selected_lang_name}**")
         
     st.divider()
-    st.markdown(
-        "<p style='text-align:center;color:#5A6577;font-size:0.75rem;'>"
-        "YouTube Data API v3</p>",
-        unsafe_allow_html=True
-    )
+    st.markdown("<p style='text-align:center;color:#5A6577;font-size:0.75rem;'>YouTube Data API v3</p>", unsafe_allow_html=True)
 
 # ============================================================
 # 메인 UI
@@ -346,8 +357,8 @@ if search_button:
     pb = st.progress(0)
     st_txt = st.empty()
     
-    # 번역 여부(enable_translation)를 인자로 넘겨 수집
-    comments = get_all_comments(youtube, video_id, mtc, pb, st_txt, enable_translation)
+    # 선택된 target_lang을 수집 함수에 전달
+    comments = get_all_comments(youtube, video_id, mtc, pb, st_txt, enable_translation, target_lang)
     st.session_state["comments"] = comments
 
 # ============================================================
@@ -398,10 +409,8 @@ if "video_info" in st.session_state and "comments" in st.session_state:
 
     st.markdown(
         f'<div style="text-align:center;margin-bottom:20px;">'
-        f'<span style="font-size:1.6rem;font-weight:800;color:#FAFAFA;">'
-        f'💬 수집된 댓글 </span>'
-        f'<span style="font-size:1.6rem;font-weight:800;color:#FF4B4B;">'
-        f'{len(comments):,}개</span></div>',
+        f'<span style="font-size:1.6rem;font-weight:800;color:#FAFAFA;">💬 수집된 댓글 </span>'
+        f'<span style="font-size:1.6rem;font-weight:800;color:#FF4B4B;">{len(comments):,}개</span></div>',
         unsafe_allow_html=True
     )
 
